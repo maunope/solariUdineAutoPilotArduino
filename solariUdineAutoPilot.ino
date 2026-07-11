@@ -22,7 +22,7 @@ struct EepromIndexDescriptor {
 
 // struct for clock status to be saved to the eeprom
 struct EepromData {
-  //initializing at WINT_MAX ensures that if the conrtoller is run without further initialization
+  //initializing at WINT_MAX ensuƒres that if the conrtoller is run without further initialization
   //it won't send pulses
   DateTime dateTime = DateTime(WINT_MAX);
   int nextPulsePolarity = 0;
@@ -55,8 +55,6 @@ FILE customStdOut;
 
 
 
-
-
 const unsigned long EEPROM_SIGNATURE = 0xD24F789F;
 const int EEPROM_PAGE_SIZE_BYTES = 64;
 const int MAX_WRITE_PER_EEPROM_PAGE = 10080;  // approx one week of regular operation
@@ -76,7 +74,7 @@ const int FEEDBACK_LED_PIN = 9;
 const int WAIT_NEXT_PULSE_CYCLE_PIN = 10;
 // duration of motor pulses, note shorter between circuit 555 timer and this
 // applies
-const int PULSE_DURATION_MILLIS = 400;
+const int PULSE_DURATION_MILLIS = 600;
 // minimun delay between pulses, overridden by manual advances. real Solari
 // Udine controllers use 4s
 const int SECS_BETWEEN_PULSES = 3;
@@ -115,6 +113,12 @@ ExternalEEPROM extEeprom;
 
 
 DateTime previousRTCDateTime = DateTime((unsigned long)0);
+int lastSleepSeconds = 0;
+
+// --- Function Prototypes ---
+void blinkFeedbackLed(int onMillis, int offMillis, int iterations);
+DateTime getRTCDateTime();
+DateTime getStandardTime(DateTime time);
 
 //sets DS3231 settings, crappy Ds3231 chips are finicky about power cuts and sometimes get their
 //settings corrupted, so we reset them to a known good state each time we boot
@@ -179,7 +183,7 @@ void setup() {
 #endif
 
   Wire.begin();
-  Wire.setClock(400000);
+  Wire.setClock(100000);
   extEeprom.setMemoryType(EEPROM_TYPE);
   extEeprom.setMemorySizeBytes(EEPROM_SIZE_BYTES);
   extEeprom.setAddressBytes(EEPROM_ADDRESS_BYTES);  // Set address bytes and page size after  MemorySizeBytes()
@@ -231,6 +235,7 @@ void setup() {
     bootTime = getRTCDateTime();
   }
   lastDailyOffsetCorrection = bootTime;
+
 
 }
 
@@ -336,7 +341,7 @@ int readEepromData(EepromData& eepromData) {
 
 //reads daily seconds offset from eeprom, returns 0 if can't read
 int getDailySecondsOffsetFromEeprom() {
-  const int eepromIndexDescriptorSizeBytes = ceil(sizeof(EepromIndexDescriptor) / (float)EEPROM_PAGE_SIZE_BYTES) * EEPROM_PAGE_SIZE_BYTES;
+  // const int eepromIndexDescriptorSizeBytes = ceil(sizeof(EepromIndexDescriptor) / (float)EEPROM_PAGE_SIZE_BYTES) * EEPROM_PAGE_SIZE_BYTES;
 
   EepromIndexDescriptor eepromIndexDescriptor;
   // check if first 4 bytes contain the required signature string
@@ -354,7 +359,7 @@ int getDailySecondsOffsetFromEeprom() {
 
 // writes dailySecondsOffset in the eeprom, returns -1 if can't write
 int writeDailySecondsOffsetToEeprom(int dailySecondsOffset) {
-  const int eepromIndexDescriptorSizeBytes = ceil(sizeof(EepromIndexDescriptor) / (float)EEPROM_PAGE_SIZE_BYTES) * EEPROM_PAGE_SIZE_BYTES;
+  // const int eepromIndexDescriptorSizeBytes = ceil(sizeof(EepromIndexDescriptor) / (float)EEPROM_PAGE_SIZE_BYTES) * EEPROM_PAGE_SIZE_BYTES;
 
   EepromIndexDescriptor eepromIndexDescriptor;
   eepromIndexDescriptor.signature = 0;
@@ -445,15 +450,22 @@ void sendPulse(EepromData& eepromData, int PULSE_DURATION_MILLIS) {
 // DateTime
 void pulseDebugStringToDisplay(EepromData eepromData, DateTime dstAdjDateTime, bool motorPulseEnable, bool isDST) {
 #ifdef DEBUG_MODE
-  //TODO use buffers here
-  String dstAdjDateTimeString = dstAdjDateTime.timestamp();
+  char buffer[16];
+
   lcd.setCursor(0, 0);
-  lcd.print("R:" + dstAdjDateTimeString.substring(dstAdjDateTimeString.indexOf("T") + 1));
+  snprintf(buffer, sizeof(buffer), "R:%02d:%02d:%02d", dstAdjDateTime.hour(), dstAdjDateTime.minute(), dstAdjDateTime.second());
+  lcd.print(buffer);
+
   lcd.setCursor(12, 0);
-  lcd.print(String(eepromData.nextPulsePolarity == 0 ? "/" : (eepromData.nextPulsePolarity > 0 ? "+" : "-")) + " " + String(motorPulseEnable ? "E" : "D"));
+  char polarityChar = eepromData.nextPulsePolarity == 0 ? '/' : (eepromData.nextPulsePolarity > 0 ? '+' : '-');
+  char enableChar = motorPulseEnable ? 'E' : 'D';
+  snprintf(buffer, sizeof(buffer), "%c %c", polarityChar, enableChar);
+  lcd.print(buffer);
+
   lcd.setCursor(0, 1);
-  String eepromDateTimeString = eepromData.dateTime.timestamp();
-  lcd.print("E:" + eepromDateTimeString.substring(eepromDateTimeString.indexOf("T") + 1));
+  snprintf(buffer, sizeof(buffer), "E:%02d:%02d:%02d", eepromData.dateTime.hour(), eepromData.dateTime.minute(), eepromData.dateTime.second());
+  lcd.print(buffer);
+
   lcd.setCursor(12, 1);
   lcd.print(isDST ? "D" : "W");
   lcd.setCursor(14, 1);
@@ -461,18 +473,16 @@ void pulseDebugStringToDisplay(EepromData eepromData, DateTime dstAdjDateTime, b
 #endif
 }
 
-//TODO remove string usage
 // crude serial commands parser, please behave, there's 100 ways this can break
 void parseSerialCommands(char command[]) {
 
   if (strncmp(command, ">>DAILYSECONDSOFFSET", 20) == 0 && (command[20] == '+' || command[20] == '-' ) && isDigit(command[21]) && isDigit(command[22]) && isDigit(command[23])) {
 
-    char buf[3];
-    buf[0] = command[21];
-    buf[1] = command[22];
-    buf[2] = command[23];
-    Serial.println(buf);
-    int dailySecondsOffset = atoi(buf);
+    int dailySecondsOffset = (command[21] - '0') * 100 + (command[22] - '0') * 10 + (command[23] - '0');
+    if (command[20] == '-') {
+      dailySecondsOffset = -dailySecondsOffset;
+    }
+    
     if (writeDailySecondsOffsetToEeprom(dailySecondsOffset)) {
       Serial.println(dailySecondsOffset);
       Serial.println(F("daily seconds offset wrote  to eeprom"));
@@ -495,14 +505,12 @@ void parseSerialCommands(char command[]) {
         return;
       }
     }
-    //TODO clean this crap
-    String temp = String(command);
-    int year = temp.substring(13, 17).toInt();
-    int month = temp.substring(17, 19).toInt();
-    int day = temp.substring(19, 21).toInt();
-    int hour = temp.substring(21, 23).toInt();
-    int minute = temp.substring(23, 25).toInt();
-    int second = temp.substring(25, 27).toInt();
+    int year = (command[13] - '0') * 1000 + (command[14] - '0') * 100 + (command[15] - '0') * 10 + (command[16] - '0');
+    int month = (command[17] - '0') * 10 + (command[18] - '0');
+    int day = (command[19] - '0') * 10 + (command[20] - '0');
+    int hour = (command[21] - '0') * 10 + (command[22] - '0');
+    int minute = (command[23] - '0') * 10 + (command[24] - '0');
+    int second = (command[25] - '0') * 10 + (command[26] - '0');
 
     DateTime manualDateTime = DateTime(year, month, day, hour, minute, second);
 
@@ -510,6 +518,9 @@ void parseSerialCommands(char command[]) {
     if (rtc.begin()) {
       rtc.adjust(manualDateTime);
       Serial.println(F("RTC module time adjusted"));
+      //this avoids the "RTC went amok" check from triggering
+      previousRTCDateTime = getRTCDateTime();
+      lastSleepSeconds = 0;
     } else {
       Serial.println(F("Unable to set time, RTC not available"));
     }
@@ -519,6 +530,7 @@ void parseSerialCommands(char command[]) {
       Serial.println("RTC module time adjusted to sketch compile date time: (not DST compensated) ");
       Serial.println(getRTCDateTime().timestamp());
       previousRTCDateTime = getRTCDateTime();
+      lastSleepSeconds = 0;
     } else {
       Serial.println(F("Unable to set time, RTC not available"));
     }
@@ -570,7 +582,6 @@ void parseSerialCommands(char command[]) {
 void loop() {
 
 
-
   if (Serial.available() > 0) {
     char command[128];
     int i = 0;
@@ -601,9 +612,9 @@ void loop() {
   //the remote risk of RTC fucking up right after boot or while the board is powered off is left unchecked, worst that will happen is
   //the board will drive the clock to a wrong timestamp, which users will notice pretty easily
 #ifndef DEBUG_MODE
-  if ((RTCDateTime > previousRTCDateTime && (RTCDateTime - previousRTCDateTime).totalseconds() > RTC_FUBAR_SECONDS) || RTCDateTime < previousRTCDateTime ) {
+  if ((RTCDateTime > previousRTCDateTime && (RTCDateTime - previousRTCDateTime).totalseconds() > (RTC_FUBAR_SECONDS + lastSleepSeconds)) || RTCDateTime < previousRTCDateTime ) {
     Serial.println(F("RTC Module went nuts! restoring last assumed good time and reebooting"));
-    rtc.adjust(previousRTCDateTime);
+    rtc.adjust(previousRTCDateTime + TimeSpan(lastSleepSeconds));
     blinkFeedbackLed(50, 300, 30); //rtc failure led blink
     asm volatile("  jmp 0");
   }
@@ -630,7 +641,7 @@ void loop() {
 
   // self reset every week+5minutes, just in case I f*cked up and some variable would
   // overflow left unchecked.
-  //Serial.println(String((RTCDateTime-bootTime).totalseconds())+" "+String(SECONDS_PER_DAY*7));
+  //Serial.print((RTCDateTime-bootTime).totalseconds()); Serial.print(F(" ")); Serial.println(SECONDS_PER_DAY*7);
   if ((RTCDateTime - bootTime).totalseconds() >= (SECONDS_PER_DAY * 7) + 300) {
     asm volatile("  jmp 0");
   }
@@ -773,6 +784,7 @@ void loop() {
     //this allows close to 95% sleep time, considering the loop takes 50ms, while retaining ease of use
     //don't change the modules left ON, or RTC will start to drift (tested on a knock off Arduino Leonardo w/ a chep *ss RS2321 bough off Amazon )
     LowPower.powerDown(SLEEP_4S, ADC_OFF, BOD_ON);
+    lastSleepSeconds = 4;
     //Wire.begin();
     // rtc.begin();
     if (digitalRead(MOTOR_PULSE_ENABLE_PIN) == LOW)  //If I've just come out of sleep
@@ -789,6 +801,8 @@ void loop() {
     lcd.init();
     lcd.clear();
 #endif
+  } else {
+    lastSleepSeconds = 0;
   }
 #endif
 }
