@@ -1,3 +1,9 @@
+# Legacy
+I'm stopping development on this board, I'll build a new, ESP32 based one with the following goals:
+- Perfoboard friendly, minimal board build effort, ideally just the ESP32, L293D and DC-DC converter.
+- WiFi connected, to allow NTP alignment and web UI configuration
+
+
 <p align="center"><img src="cifra12.png" width="320px" alt="Solari Udine Cifra 12"/></p>
 
 
