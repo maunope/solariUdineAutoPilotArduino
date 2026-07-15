@@ -47,7 +47,6 @@ The following features improve durability and operation:
 
 - [LiquidCrystal I2C](https://github.com/johnrickman/LiquidCrystal_I2C)
 - [RTClib](https://github.com/adafruit/RTClib)
-- [Regexp](https://github.com/nickgammon/Regexp)
 - [SparkFun External EEPROM Arduino Library](https://github.com/sparkfun/SparkFun_External_EEPROM_Arduino_Library)
 - [Rocket Scream Low Power](https://github.com/rocketscream/Low-Power)
 
